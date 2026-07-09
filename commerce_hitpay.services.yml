@@ -1,0 +1,32 @@
+services:
+
+  commerce_hitpay.client_factory:
+    class: Drupal\commerce_hitpay\Service\HitPayClientFactory
+    arguments:
+      - '@http_client'
+      - '@logger.channel.commerce_hitpay'
+
+  Drupal\commerce_hitpay\Service\HitPayClientFactoryInterface:
+    alias: commerce_hitpay.client_factory
+    public: true
+
+  commerce_hitpay.signature:
+    class: Drupal\commerce_hitpay\Service\SignatureVerifier
+
+  commerce_hitpay.payment_manager:
+    class: Drupal\commerce_hitpay\Manager\PaymentManager
+    arguments:
+      - '@entity_type.manager'
+
+  commerce_hitpay.webhook_processor:
+    class: Drupal\commerce_hitpay\Service\WebhookProcessor
+    arguments:
+      - '@commerce_hitpay.signature'
+      - '@entity_type.manager'
+      - '@logger.channel.commerce_hitpay'
+      - '@commerce_hitpay.payment_manager'
+
+  logger.channel.commerce_hitpay:
+    parent: logger.channel_base
+    arguments:
+      - commerce_hitpay

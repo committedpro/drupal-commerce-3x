@@ -1,0 +1,11 @@
+name: HitPay
+type: module
+description: HitPay payment gateway for Drupal Commerce 3.x.
+package: Commerce
+version: '1.0.0'
+
+core_version_requirement: '^10.3 || ^11'
+
+dependencies:
+  - commerce:commerce
+  - commerce:commerce_payment

@@ -1,0 +1,18 @@
+commerce_payment.commerce_payment_gateway.plugin.hitpay:
+  type: mapping
+  mapping:
+    api_key:
+      type: string
+      label: API Key
+
+    debug:
+      type: boolean
+      label: Debug mode
+      
+    webhook_id:
+      type: string
+      label: Webhook ID
+      
+    webhook_salt:
+      type: string
+      label: Webhook Salt

@@ -1,0 +1,19 @@
+commerce_hitpay.return:
+  path: '/commerce/hitpay/return'
+  defaults:
+    _controller: 'Drupal\commerce_hitpay\Controller\ReturnController::handleReturn'
+    _title: 'HitPay Return'
+  requirements:
+    _access: 'TRUE'
+
+commerce_hitpay.webhook:
+  path: '/commerce/hitpay/webhook/{commerce_payment_gateway}'
+  defaults:
+    _controller: 'Drupal\commerce_hitpay\Controller\WebhookController::handleWebhook'
+  methods: [POST]
+  requirements:
+    _access: 'TRUE'
+  options:
+    parameters:
+      commerce_payment_gateway:
+        type: 'entity:commerce_payment_gateway'

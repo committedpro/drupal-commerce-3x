@@ -1,0 +1,82 @@
+<?php
+
+declare(strict_types=1);
+
+/**
+ * @file
+ * Install, update, and uninstall functions for the Commerce HitPay module.
+ */
+
+use Drupal\commerce_hitpay\Service\HitPayClientFactoryInterface;
+use Drupal\commerce_hitpay\Exception\HitPayException;
+
+/**
+ * Implements hook_uninstall().
+ */
+function commerce_hitpay_uninstall(): void {
+
+	// Fetch the Entity Type Manager storage to load the gateway configs.
+	$entity_type_manager = \Drupal::entityTypeManager();
+	$gateway_storage = $entity_type_manager->getStorage('commerce_payment_gateway');
+	
+	/** @var \Drupal\commerce_payment\Entity\PaymentGatewayInterface[] $all_gateways */
+	$all_gateways = $gateway_storage->loadMultiple();
+	
+	// Guard Clause: If no payment gateways exist, exit early.
+	if (empty($all_gateways)) {
+	  return;
+	}
+	
+	// Locate the client factory service container.
+	/** @var \Drupal\commerce_hitpay\Service\HitPayClientFactoryInterface $client_factory */
+	$client_factory = \Drupal::service(HitPayClientFactoryInterface::class);
+
+	// Loop through every payment gateway configured on the website.
+	foreach ($all_gateways as $gateway) {
+	  
+	  // Only look at gateways powered by your 'hitpay' plugin ID.
+	  if ($gateway->getPluginId() !== 'hitpay') {
+			continue;
+	  }
+
+	  $configuration = $gateway->getPluginConfiguration();
+	  $webhook_id = $configuration['webhook_id'] ?? '';
+	  $api_key = $configuration['api_key'] ?? '';
+	  $mode = $configuration['mode'] ?? 'test';
+
+	  // Only clean up if valid API parameters exist.
+	  if ($webhook_id === '' || $api_key === '') {
+			continue;
+	  }
+	  
+	  try {
+			// Create the HitPay API client.
+			$client = $client_factory->create(
+				$api_key,
+				$mode === 'test',
+				!empty($configuration['debug'])
+			);
+
+			// Delete the remote webhook from HitPay.
+			$client->deleteWebhook($webhook_id);
+	  }
+	  catch (HitPayException $e) {
+			// Suppress 404s so the module uninstall is never blocked.
+			if ($e->getCode() !== 404) {
+				\Drupal::logger('commerce_hitpay')->warning(
+					'Module Uninstall: Error deleting webhook @id: @msg', 
+					[
+						'@id' => $webhook_id,
+						'@msg' => $e->getMessage()
+					]
+				);
+			}
+	  }
+	  catch (\Throwable $e) {
+		  \Drupal::logger('commerce_hitpay')->error(
+				'Unexpected error deleting HitPay webhook: @message',
+				['@message' => $e->getMessage()]
+		  );
+	  }
+	}
+}

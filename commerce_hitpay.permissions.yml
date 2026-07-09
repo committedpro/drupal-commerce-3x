@@ -1,0 +1,4 @@
+administer hitpay:
+  title: 'Administer HitPay Payment Gateway'
+  description: 'Manage API credentials, configure automated webhooks, and view payment logs for HitPay.'
+  restrict access: true

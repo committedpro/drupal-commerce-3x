@@ -1,0 +1,36 @@
+{
+    "name": "hitpay/commerce_hitpay",
+    "description": "HitPay payment gateway for Drupal Commerce 3.x.",
+		"version": "1.0.0",
+    "homepage": "https://github.com/hit-pay/drupal-commerce-3x",
+    "type": "drupal-module",
+    "license": "GPL-2.0-or-later",
+    "require": {
+				"php": "^8.2",
+				"drupal/core": "^10.3 || ^11",
+				"drupal/commerce": "^3.0",
+				"drupal/commerce_payment": "^3.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Drupal\\commerce_hitpay\\": "src/"
+        }
+    },
+    "extra": {
+        "drupal": {
+            "package": "Commerce"
+        }
+    },
+    "support": {
+        "issues": "https://github.com/hit-pay/drupal-commerce-3x/issues",
+        "source": "https://github.com/hit-pay/drupal-commerce-3x"
+    },
+    "keywords": [
+        "drupal",
+        "commerce",
+        "payment",
+        "hitpay"
+    ],
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}

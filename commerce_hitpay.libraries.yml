@@ -1,0 +1,17 @@
+processing:
+  version: 1.0.0
+  js:
+    js/hitpay-processing.js: {}
+  dependencies:
+    - core/drupal
+    - core/drupalSettings
+    - core/once
+    
+waiting:
+  version: 1.0.0
+  js:
+    js/hitpay-waiting.js: {}
+  dependencies:
+    - core/drupal
+    - core/drupalSettings
+    - core/once

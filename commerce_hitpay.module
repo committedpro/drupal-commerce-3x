@@ -1,0 +1,320 @@
+<?php
+
+declare(strict_types=1);
+
+/**
+ * @file
+ * Primary module hooks for the Commerce HitPay module.
+ */
+
+use Drupal\commerce_payment\Entity\PaymentGatewayInterface;
+use Drupal\commerce_hitpay\Service\HitPayClientFactoryInterface;
+use Drupal\commerce_hitpay\Exception\HitPayException;
+use Drupal\Core\Entity\EntityInterface;
+use Drupal\Core\Entity\Display\EntityViewDisplayInterface;
+use Drupal\commerce_order\Entity\OrderInterface;
+
+/**
+ * Implements hook_ENTITY_TYPE_delete() for commerce_payment_gateway.
+ * 
+ * Safely removes the associated remote webhook on HitPay servers 
+ * whenever a HitPay payment gateway is deleted from the Drupal admin UI.
+ */
+function commerce_hitpay_commerce_payment_gateway_delete(PaymentGatewayInterface $payment_gateway): void {
+  // Verify that the deleted gateway is actually utilizing your HitPay plugin
+  
+  if ($payment_gateway->getPluginId() !== 'hitpay') {
+    return;
+  }
+  
+  $configuration = $payment_gateway->getPluginConfiguration();
+
+  $webhook_id = $configuration['webhook_id'] ?? '';
+  $api_key = $configuration['api_key'] ?? '';
+  $mode = $configuration['mode'] ?? 'test';
+
+  if ($webhook_id === '' || $api_key === '') {
+    return;
+  }
+	
+  try {
+		/** @var \Drupal\commerce_hitpay\Service\HitPayClientFactoryInterface $client_factory */
+		$client_factory = \Drupal::service(HitPayClientFactoryInterface::class);
+	
+		$client = $client_factory->create(
+			$api_key,
+			$mode === 'test',
+			!empty($configuration['debug'])
+	  );
+		// Delete the remote webhook from HitPay.
+		$client->deleteWebhook($webhook_id);
+  }
+  catch (HitPayException $e) {
+		// Suppress failure so deleting the gateway inside Drupal isn't blocked 
+		// if the API key is expired or the webhook was already manually deleted on HitPay dashboard.
+		if ($e->getCode() !== 404) {
+			\Drupal::logger('commerce_hitpay')->warning(
+				'Failed to delete HitPay webhook @webhook_id for payment gateway @gateway: @message',
+				[
+					'@webhook_id' => $webhook_id,
+					'@gateway' => $payment_gateway->id(),
+					'@message' => $e->getMessage(),
+				]
+			);
+		}
+  }
+}
+
+/**
+ * Implements hook_entity_view_alter().
+ */
+function commerce_hitpay_entity_view_alter(array &$build, EntityInterface $entity, EntityViewDisplayInterface $display): void {
+  // Only alter Commerce orders.
+  if (!$entity instanceof OrderInterface) {
+    return;
+  }
+
+  if ($display->getMode() !== 'default') {
+    return;
+  }
+
+  $payment_request_id = $entity->getData('hitpay_payment_request_id') ?? '';
+  $payment_id = $entity->getData('hitpay_payment_id') ?? '';
+  $payment_status = $entity->getData('hitpay_payment_status') ?? '';
+
+  $payment_method = $entity->getData('hitpay_payment_method') ?? '';
+  $fees = $entity->getData('hitpay_fees') ?? '';
+  $fees_currency = $entity->getData('hitpay_fees_currency') ?? '';
+	$hitpay_get_payment_force = (bool) $entity->getData(
+		'hitpay_get_payment_force'
+	);
+	// We thought after refund, we will get the updated HitPay fees. 
+	// But it is not returning the updated HitPay fees.
+	// So disabled this forcibily get payment details for now
+	$hitpay_get_payment_force = FALSE;
+	
+  // Don't display anything if there is no HitPay data.
+  if (!$payment_request_id) {
+    return;
+  }
+  
+  if (empty($payment_method) || empty($fees) || empty($fees_currency) || $hitpay_get_payment_force) {
+	  /** @var \Drupal\commerce_payment\Entity\PaymentInterface[] $payments */
+	  $payments = \Drupal::entityTypeManager()
+			->getStorage('commerce_payment')
+			->loadByProperties([
+				'order_id' => $entity->id()
+			]);
+
+	  if (!$payments) {
+			return;
+	  }
+		
+		$payment_gateway = NULL;
+															 
+
+		foreach ($payments as $payment) {
+			$candidate_gateway = $payment->getPaymentGateway();
+
+			if (
+				$candidate_gateway &&
+				$candidate_gateway->getPluginId() === 'hitpay'
+			) {
+				$payment_gateway = $candidate_gateway;
+				break;
+			}
+		}
+		
+		if (!$payment_gateway) {
+			return;
+		}
+	  $configuration = $payment_gateway->getPluginConfiguration();
+	  
+	  $api_key = $configuration['api_key'] ?? '';
+	  $mode = $configuration['mode'] ?? 'test';
+	  
+	  if ($api_key) {
+		  try {
+				/** @var \Drupal\commerce_hitpay\Service\HitPayClientFactoryInterface $client_factory */
+				$client_factory = \Drupal::service(HitPayClientFactoryInterface::class);
+				
+				$client = $client_factory->create(
+					$api_key,
+					$mode === 'test',
+					!empty($configuration['debug'])
+				);
+				// Fetch transaction metrics directly from HitPay
+				$response = $client->getPayment((string)$payment_request_id);
+				
+				$hitpay_payments = $response['payments'] ?? [];
+				if (isset($hitpay_payments[0]) && is_array($hitpay_payments[0])) {
+					$hitpay_payment = $hitpay_payments[0];
+					$payment_method = $hitpay_payment['payment_type'] ?? '';
+					$entity->setData('hitpay_payment_method', $payment_method);
+					$fees = $hitpay_payment['fees'] ?? '';
+					$entity->setData('hitpay_fees', $fees);
+					$fees_currency = $hitpay_payment['fees_currency'] ?? '';
+					$entity->setData('hitpay_fees_currency', $fees_currency);
+					$entity->setData('hitpay_get_payment_force', FALSE);
+					try {
+						$entity->save();
+					}
+					catch (\Drupal\Core\Entity\EntityStorageException $e) {
+						\Drupal::logger('commerce_hitpay')->error(
+							'Failed to save HitPay payment metadata for order @order_id: @message',
+							[
+								'@order_id' => $entity->id(),
+								'@message' => $e->getMessage(),
+							]
+						);
+					}
+				}
+			}
+		  catch (HitPayException $e) {
+				// Suppress failure so getting the payment status failure isn't blocked 
+				if ($e->getCode() !== 404) {
+					\Drupal::logger('commerce_hitpay')->warning(
+						'Failed to get HitPay payment request status @payment_request_id for payment gateway @gateway: @message',
+						[
+							'@payment_request_id' => $payment_request_id,
+							'@gateway' => $payment_gateway->id(),
+							'@message' => $e->getMessage(),
+						]
+					);
+				}
+		  }
+	  }
+  }
+
+  $build['hitpay'] = [
+    '#type' => 'details',
+    '#title' => t('HitPay Information'),
+    '#open' => TRUE,
+    '#weight' => 100,
+  ];
+  
+  if ($payment_method) {
+    $build['hitpay']['payment_method'] = [
+      '#type' => 'item',
+      '#title' => t('Payment Type'),
+      '#markup' => ucwords(str_replace("_", " ", $payment_method)),
+    ];
+  }
+  
+  if ($fees) {
+    $build['hitpay']['hitpay_fees'] = [
+      '#type' => 'item',
+      '#title' => t('HitPay Fee'),
+      '#markup' => $fees.' '.($fees_currency ? strtoupper($fees_currency) : ''),
+    ];
+  }
+  
+  if ($payment_request_id) {
+    $build['hitpay']['payment_request_id'] = [
+      '#type' => 'item',
+      '#title' => t('Payment Request ID'),
+      '#markup' => $payment_request_id,
+    ];
+  }
+  
+  if ($payment_id) {
+    $build['hitpay']['payment_id'] = [
+      '#type' => 'item',
+      '#title' => t('Payment ID'),
+      '#markup' => $payment_id,
+    ];
+  }
+  
+  if ($payment_status) {
+    $build['hitpay']['payment_status'] = [
+      '#type' => 'item',
+      '#title' => t('Payment Status'),
+      '#markup' => ucfirst($payment_status),
+    ];
+  }
+	
+  $refunds = $entity->getData('hitpay_refunds');
+
+	if (!is_array($refunds)) {
+		$refunds = [];
+	}
+
+	if (!empty($refunds)) {
+		$build['hitpay']['refunds'] = [
+			'#type' => 'details',
+			'#title' => t('HitPay Refunds'),
+			'#open' => TRUE,
+		];
+
+		foreach ($refunds as $payment_id => $payment_refunds) {
+			if (!is_array($payment_refunds)) {
+				continue;
+			}
+
+			foreach ($payment_refunds as $index => $refund) {
+				if (!is_array($refund)) {
+					continue;
+				}
+
+				$refund_id = $refund['id'] ?? '';
+				$refund_status = $refund['status'] ?? '';
+				$refund_amount = $refund['amount'] ?? '';
+				$refund_currency = $refund['currency'] ?? '';
+				$refund_created = $refund['created'] ?? 0;
+
+				$refund_number = $index + 1;
+
+				$build['hitpay']['refunds']['payment_' . $payment_id . '_refund_' . $index] = [
+					'#type' => 'details',
+					'#title' => t('Refund @number', [
+						'@number' => $refund_number,
+					]),
+					'#open' => TRUE,
+				];
+
+				if ($payment_id !== '') {
+					$build['hitpay']['refunds']['payment_' . $payment_id . '_refund_' . $index]['payment_id'] = [
+						'#type' => 'item',
+						'#title' => t('Commerce Payment ID'),
+						'#markup' => $payment_id,
+					];
+				}
+
+				if ($refund_id !== '') {
+					$build['hitpay']['refunds']['payment_' . $payment_id . '_refund_' . $index]['refund_id'] = [
+						'#type' => 'item',
+						'#title' => t('Refund ID'),
+						'#markup' => $refund_id,
+					];
+				}
+
+				if ($refund_status !== '') {
+					$build['hitpay']['refunds']['payment_' . $payment_id . '_refund_' . $index]['status'] = [
+						'#type' => 'item',
+						'#title' => t('Status'),
+						'#markup' => ucfirst($refund_status),
+					];
+				}
+
+				if ($refund_amount !== '') {
+					$build['hitpay']['refunds']['payment_' . $payment_id . '_refund_' . $index]['amount'] = [
+						'#type' => 'item',
+						'#title' => t('Amount'),
+						'#markup' => $refund_amount . ($refund_currency !== '' ? ' ' . strtoupper($refund_currency) : ''),
+					];
+				}
+
+				if ($refund_created) {
+					$build['hitpay']['refunds']['payment_' . $payment_id . '_refund_' . $index]['created'] = [
+						'#type' => 'item',
+						'#title' => t('Created'),
+						'#markup' => \Drupal::service('date.formatter')->format(
+							(int) $refund_created,
+							'medium'
+						),
+					];
+				}
+			}
+		}
+	}
+}
